@@ -1,0 +1,355 @@
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "Push Hub",
+    LoadingTitle = "Push Hub Loading...",
+    LoadingSubtitle = "Aggressive Edge Detection",
+    ConfigurationSaving = { Enabled = false },
+    Discord = { Enabled = false },
+    KeySystem = false,
+})
+
+-- ================= SERVICES & VARIABLES =================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+local Stats = game:GetService("Stats")
+local Lighting = game:GetService("Lighting")
+local Camera = Workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+
+local State = {
+    Hitbox = { Enabled = false, ShowVisual = false, Size = 20, Target = "Ball", Shape = "Sphere", Color = Color3.fromRGB(255, 255, 255) },
+    ESP = { BallCircle = false, Speed = false, PingBox = false },
+    Move = { InfJump = false, SpeedEnabled = false, SpeedValue = 16 }
+}
+
+local ActiveBalls = {}
+local OriginalProps = {}
+local Adornments = {}
+local BallESP = {}
+
+local Colors = {
+    ["White"] = Color3.fromRGB(255, 255, 255),
+    ["Dark Gray"] = Color3.fromRGB(80, 80, 80),
+    ["Red"] = Color3.fromRGB(255, 40, 40),
+    ["Blue"] = Color3.fromRGB(40, 100, 255),
+    ["Black"] = Color3.fromRGB(0, 0, 0)
+}
+
+-- ================= PING UI SETUP =================
+local PingGui = Instance.new("ScreenGui")
+PingGui.Name = "PushHubPingMonitor"
+PingGui.Parent = CoreGui
+
+local PingFrame = Instance.new("Frame")
+PingFrame.Size = UDim2.new(0, 150, 0, 25)
+PingFrame.Position = UDim2.new(0.5, -75, 0, 15)
+PingFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+PingFrame.BackgroundTransparency = 0.4
+PingFrame.BorderSizePixel = 0
+PingFrame.Visible = false
+PingFrame.Parent = PingGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 5)
+UICorner.Parent = PingFrame
+
+local PingText = Instance.new("TextLabel")
+PingText.Size = UDim2.new(1, 0, 1, 0)
+PingText.BackgroundTransparency = 1
+PingText.TextColor3 = Color3.fromRGB(255, 255, 255)
+PingText.TextScaled = true
+PingText.Font = Enum.Font.Code
+PingText.Text = "Ping: 0 ms"
+PingText.Parent = PingFrame
+
+-- ================= BALL CACHE =================
+local function CheckAndAddBall(obj)
+    if obj:IsA("BasePart") then
+        local name = obj.Name:lower()
+        if name:match("ball") or name:match("football") or name:match("bola") or obj.Name == "TPS" then
+            ActiveBalls[obj] = true
+        end
+    end
+end
+
+for _, obj in ipairs(Workspace:GetDescendants()) do CheckAndAddBall(obj) end
+Workspace.DescendantAdded:Connect(CheckAndAddBall)
+Workspace.DescendantRemoving:Connect(function(obj)
+    if ActiveBalls[obj] then
+        ActiveBalls[obj] = nil
+        if Adornments[obj] then Adornments[obj]:Destroy(); Adornments[obj] = nil end
+        if BallESP[obj] then BallESP[obj].Circle:Remove(); BallESP[obj].Text:Remove(); BallESP[obj] = nil end
+    end
+end)
+
+-- ================= HELPER FUNCTIONS =================
+local function GetActionParts()
+    local char = LocalPlayer.Character
+    if not char then return {} end
+    local parts = {}
+    local targetLimbs = {
+        "Right Leg", "Left Leg", "RightFoot", "LeftFoot", "RightLowerLeg", "LeftLowerLeg", 
+        "Right Arm", "Left Arm", "RightHand", "LeftHand", "RightLowerArm", "LeftLowerArm", 
+        "Head"
+    }
+    for _, name in ipairs(targetLimbs) do
+        local limb = char:FindFirstChild(name)
+        if limb then table.insert(parts, limb) end
+    end
+    return parts
+end
+
+local function ClearAdornments()
+    for part, ad in pairs(Adornments) do if ad then ad:Destroy() end end
+    table.clear(Adornments)
+end
+
+local function ResetSizes()
+    for part, props in pairs(OriginalProps) do
+        if part and part.Parent then
+            part.Size = props.Size
+            part.Massless = props.Massless
+            part.CanQuery = props.CanQuery
+            part.CustomPhysicalProperties = props.PhysProps
+            if part.Name == "HumanoidRootPart" then part.Transparency = 1 end
+        end
+    end
+    table.clear(OriginalProps)
+end
+
+local function ApplyVisual(part, size)
+    if not State.Hitbox.ShowVisual then 
+        if Adornments[part] then Adornments[part]:Destroy(); Adornments[part] = nil end
+        return 
+    end
+    local ad = Adornments[part]
+    if ad and ((State.Hitbox.Shape == "Box" and not ad:IsA("BoxHandleAdornment")) or (State.Hitbox.Shape == "Sphere" and not ad:IsA("SphereHandleAdornment"))) then
+        ad:Destroy(); ad = nil
+    end
+    if not ad then
+        ad = State.Hitbox.Shape == "Box" and Instance.new("BoxHandleAdornment") or Instance.new("SphereHandleAdornment")
+        ad.Adornee = part
+        ad.AlwaysOnTop = true
+        ad.ZIndex = 10
+        ad.Transparency = 0.5
+        ad.Parent = CoreGui
+        Adornments[part] = ad
+    end
+    
+    if State.Hitbox.Shape == "Box" then ad.Size = Vector3.new(size, size, size) else ad.Radius = size / 2 end
+    ad.Color3 = State.Hitbox.Color
+end
+
+local function ExpandHitbox(part, hrp)
+    if not part then return end
+    if not OriginalProps[part] then 
+        OriginalProps[part] = {
+            Size = part.Size, Massless = part.Massless, CanQuery = part.CanQuery, PhysProps = part.CustomPhysicalProperties
+        } 
+    end
+    
+    local desiredSize = State.Hitbox.Size
+    local hitboxRadius = desiredSize / 2
+
+    -- Visual SELALU full size sesuai settingan
+    ApplyVisual(part, desiredSize)
+
+    -- [DYNAMIC CAMERA BUG FIX]
+    local distFromCam = (Camera.CFrame.Position - part.Position).Magnitude
+    if distFromCam <= hitboxRadius + 1 then
+        local safeSize = math.max(OriginalProps[part].Size.X, (distFromCam * 2) - 3)
+        part.Size = Vector3.new(safeSize, safeSize, safeSize)
+    else
+        part.Size = Vector3.new(desiredSize, desiredSize, desiredSize)
+    end
+    
+    part.CanCollide = false 
+    part.Massless = true 
+    part.CanQuery = true 
+    part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
+    
+    -- [AGGRESSIVE EDGE DETECTION SYSTEM]
+    if firetouchinterest and hrp then
+        local distFromPlayer = (hrp.Position - part.Position).Magnitude
+        
+        -- Radius Hitbox + Lebar rata-rata tubuh karakter (3.5 stud)
+        -- Ini membuat sistem langsung memicu sentuhan sesaat setelah SETENGAH BADAN atau UJUNG KAKI menyentuh visual hitbox.
+        if distFromPlayer <= (hitboxRadius + 3.5) then 
+            local actionParts = GetActionParts()
+            for _, aPart in ipairs(actionParts) do
+                firetouchinterest(aPart, part, 0) -- Mulai Sentuh
+                firetouchinterest(aPart, part, 1) -- Lepas Sentuh
+            end
+        end
+    end
+end
+
+-- ================= TABS =================
+local TabHitbox = Window:CreateTab("Hitbox", 4483345998)
+local TabESP = Window:CreateTab("ESP", 4483362458)
+local TabMovement = Window:CreateTab("Movement", 4483347333)
+local TabPotato = Window:CreateTab("Potato", 4483345998)
+
+-- ================= HITBOX TAB =================
+TabHitbox:CreateToggle({
+    Name = "Enable Dynamic Hitbox",
+    CurrentValue = false,
+    Callback = function(v) State.Hitbox.Enabled = v; if not v then ResetSizes(); ClearAdornments() end end,
+})
+
+TabHitbox:CreateToggle({
+    Name = "Show Visual Hitbox",
+    CurrentValue = false,
+    Callback = function(v) State.Hitbox.ShowVisual = v; if not v then ClearAdornments() end end,
+})
+
+TabHitbox:CreateSlider({
+    Name = "Hitbox Size",
+    Range = {1, 100},
+    Increment = 1,
+    Suffix = "Studs",
+    CurrentValue = 20,
+    Callback = function(v) State.Hitbox.Size = v end,
+})
+
+TabHitbox:CreateDropdown({
+    Name = "Hitbox Target",
+    Options = {"Ball"},
+    CurrentOption = {"Ball"},
+    MultipleOptions = false,
+    Callback = function(opt) State.Hitbox.Target = opt[1]; ResetSizes(); ClearAdornments() end,
+})
+
+TabHitbox:CreateDropdown({
+    Name = "Hitbox Shape",
+    Options = {"Box", "Sphere"},
+    CurrentOption = {"Sphere"},
+    MultipleOptions = false,
+    Callback = function(opt) State.Hitbox.Shape = opt[1] end,
+})
+
+TabHitbox:CreateDropdown({
+    Name = "Hitbox Color",
+    Options = {"White", "Dark Gray", "Red", "Blue", "Black"},
+    CurrentOption = {"Red"},
+    MultipleOptions = false,
+    Callback = function(opt) State.Hitbox.Color = Colors[opt[1]] end,
+})
+
+-- ================= ESP TAB =================
+TabESP:CreateToggle({ Name = "All Balls Circle ESP", CurrentValue = false, Callback = function(v) State.ESP.BallCircle = v end })
+TabESP:CreateToggle({ Name = "Ball Speed ESP", CurrentValue = false, Callback = function(v) State.ESP.Speed = v end })
+TabESP:CreateToggle({ Name = "Show Ping & MS Box", CurrentValue = false, Callback = function(v) State.ESP.PingBox = v; PingFrame.Visible = v end })
+
+-- ================= MOVEMENT TAB =================
+TabMovement:CreateToggle({ Name = "Infinite Jump", CurrentValue = false, Callback = function(v) State.Move.InfJump = v end })
+TabMovement:CreateToggle({
+    Name = "Enable WalkSpeed", CurrentValue = false,
+    Callback = function(v) State.Move.SpeedEnabled = v; if not v and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then LocalPlayer.Character.Humanoid.WalkSpeed = 16 end end,
+})
+TabMovement:CreateSlider({ Name = "WalkSpeed Value", Range = {16, 400}, Increment = 5, Suffix = "Speed", CurrentValue = 16, Callback = function(v) State.Move.SpeedValue = v end })
+
+-- ================= POTATO TAB =================
+TabPotato:CreateButton({
+    Name = "Enable Anti-Lag",
+    Callback = function()
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and not obj.Parent:FindFirstChild("Humanoid") then
+                obj.Material = Enum.Material.SmoothPlastic
+            elseif obj:IsA("Decal") or obj:IsA("Texture") then obj:Destroy() end
+        end
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 9e9
+        sethiddenproperty(Lighting, "Technology", 2)
+        settings().Rendering.QualityLevel = 1
+    end,
+})
+
+-- ================= ENGINE CORE LOOPS =================
+RunService.Heartbeat:Connect(function()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+    -- 1. DYNAMIC HITBOX LOGIC
+    if State.Hitbox.Enabled then
+        pcall(function()
+            sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+            sethiddenproperty(LocalPlayer, "MaxSimulationRadius", math.huge)
+        end)
+
+        if State.Hitbox.Target == "Ball" then
+            for ball, _ in pairs(ActiveBalls) do
+                if ball and ball.Parent then
+                    ExpandHitbox(ball, hrp)
+                end
+            end
+        end
+    end
+
+    -- 2. ESP LOGIC
+    for ball, _ in pairs(ActiveBalls) do
+        if not BallESP[ball] then
+            BallESP[ball] = { Circle = Drawing.new("Circle"), Text = Drawing.new("Text") }
+            BallESP[ball].Circle.Thickness = 2
+            BallESP[ball].Circle.Filled = false
+            BallESP[ball].Circle.Color = Color3.fromRGB(255, 120, 0)
+            BallESP[ball].Text.Center = true
+            BallESP[ball].Text.Size = 16
+            BallESP[ball].Text.Outline = true
+            BallESP[ball].Text.Color = Color3.fromRGB(255, 255, 255)
+        end
+
+        if State.ESP.BallCircle and ball and ball.Parent then
+            local pos, onScreen = Camera:WorldToViewportPoint(ball.Position)
+            if onScreen then
+                BallESP[ball].Circle.Visible = true
+                BallESP[ball].Circle.Position = Vector2.new(pos.X, pos.Y)
+                local dist = (Camera.CFrame.Position - ball.Position).Magnitude
+                BallESP[ball].Circle.Radius = math.clamp(1000 / dist, 5, 100)
+                
+                if State.ESP.Speed then
+                    BallESP[ball].Text.Visible = true
+                    BallESP[ball].Text.Position = Vector2.new(pos.X, pos.Y - 20)
+                    BallESP[ball].Text.Text = "Spd: " .. math.floor(ball.AssemblyLinearVelocity.Magnitude)
+                else
+                    BallESP[ball].Text.Visible = false
+                end
+            else
+                BallESP[ball].Circle.Visible = false; BallESP[ball].Text.Visible = false
+            end
+        else
+            BallESP[ball].Circle.Visible = false; BallESP[ball].Text.Visible = false
+        end
+    end
+    
+    -- 3. PING & MS UI
+    if State.ESP.PingBox then
+        pcall(function() PingText.Text = "Ping: " .. tostring(math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())) .. " ms" end)
+    end
+end)
+
+-- WalkSpeed Loop
+RunService.Stepped:Connect(function()
+    if State.Move.SpeedEnabled and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+        LocalPlayer.Character.Humanoid.WalkSpeed = State.Move.SpeedValue
+    end
+end)
+
+-- Jump Hook
+UserInputService.JumpRequest:Connect(function()
+    if State.Move.InfJump and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+        LocalPlayer.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+    end
+end)
+
+Rayfield:Notify({
+    Title = "Push Hub",
+    Content = "Aggressive Edge Detection Active!",
+    Duration = 5,
+})
+
