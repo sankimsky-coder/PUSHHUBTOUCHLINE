@@ -3,7 +3,7 @@ local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 local Window = Rayfield:CreateWindow({
     Name = "Push Hub",
     LoadingTitle = "Push Hub Loading...",
-    LoadingSubtitle = "Aggressive Edge Detection",
+    LoadingSubtitle = "Stable Dribble & Aggressive Touch",
     ConfigurationSaving = { Enabled = false },
     Discord = { Enabled = false },
     KeySystem = false,
@@ -156,13 +156,15 @@ local function ExpandHitbox(part, hrp)
     local desiredSize = State.Hitbox.Size
     local hitboxRadius = desiredSize / 2
 
-    -- Visual SELALU full size sesuai settingan
+    -- Visual SELALU full size
     ApplyVisual(part, desiredSize)
 
-    -- [DYNAMIC CAMERA BUG FIX]
+    -- [DYNAMIC CAMERA STABILIZER]
     local distFromCam = (Camera.CFrame.Position - part.Position).Magnitude
     if distFromCam <= hitboxRadius + 1 then
-        local safeSize = math.max(OriginalProps[part].Size.X, (distFromCam * 2) - 3)
+        -- Mencegah bola mengecil terlalu ekstrem saat kamera goyang.
+        -- Ini menjaga fisik bola tetap optimal untuk dideteksi engine game.
+        local safeSize = math.max(OriginalProps[part].Size.X, (distFromCam * 2) - 2)
         part.Size = Vector3.new(safeSize, safeSize, safeSize)
     else
         part.Size = Vector3.new(desiredSize, desiredSize, desiredSize)
@@ -173,17 +175,18 @@ local function ExpandHitbox(part, hrp)
     part.CanQuery = true 
     part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
     
-    -- [AGGRESSIVE EDGE DETECTION SYSTEM]
+    -- [LOCKED AGGRESSIVE TOUCH]
+    -- Bekerja absolut independen dari goyangan kamera.
     if firetouchinterest and hrp then
         local distFromPlayer = (hrp.Position - part.Position).Magnitude
         
-        -- Radius Hitbox + Lebar rata-rata tubuh karakter (3.5 stud)
-        -- Ini membuat sistem langsung memicu sentuhan sesaat setelah SETENGAH BADAN atau UJUNG KAKI menyentuh visual hitbox.
-        if distFromPlayer <= (hitboxRadius + 3.5) then 
+        -- Radius asli + 4 stud toleransi.
+        -- Menjamin bola lengket saat gerak zig-zag ekstrim dan menempel langsung dari jauh.
+        if distFromPlayer <= (hitboxRadius + 4) then 
             local actionParts = GetActionParts()
             for _, aPart in ipairs(actionParts) do
-                firetouchinterest(aPart, part, 0) -- Mulai Sentuh
-                firetouchinterest(aPart, part, 1) -- Lepas Sentuh
+                firetouchinterest(aPart, part, 0)
+                firetouchinterest(aPart, part, 1)
             end
         end
     end
@@ -197,7 +200,7 @@ local TabPotato = Window:CreateTab("Potato", 4483345998)
 
 -- ================= HITBOX TAB =================
 TabHitbox:CreateToggle({
-    Name = "Enable Dynamic Hitbox",
+    Name = "Enable Stable Hitbox",
     CurrentValue = false,
     Callback = function(v) State.Hitbox.Enabled = v; if not v then ResetSizes(); ClearAdornments() end end,
 })
@@ -275,7 +278,7 @@ RunService.Heartbeat:Connect(function()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
 
-    -- 1. DYNAMIC HITBOX LOGIC
+    -- 1. STABLE HITBOX LOGIC
     if State.Hitbox.Enabled then
         pcall(function()
             sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
@@ -349,7 +352,8 @@ end)
 
 Rayfield:Notify({
     Title = "Push Hub",
-    Content = "Aggressive Edge Detection Active!",
-    Duration = 5,
+    Content = "Stable Dribble System Active!",
+    Duration = 1,
 })
+
 
